@@ -15,6 +15,7 @@
 #include "mediapipe/examples/desktop/autoflip/quality/scene_cropper.h"
 
 #include <memory>
+#include <fstream>
 
 #include "absl/memory/memory.h"
 #include "mediapipe/examples/desktop/autoflip/quality/polynomial_regression_path_solver.h"
@@ -89,7 +90,8 @@ absl::Status SceneCropper::CropFrames(
     const std::vector<FocusPointFrame>& prior_focus_point_frames,
     int top_static_border_size, int bottom_static_border_size,
     const bool continue_last_scene, std::vector<cv::Rect>* crop_from_location,
-    std::vector<cv::Mat>* cropped_frames) {
+    std::vector<cv::Mat>* cropped_frames,
+    const std::string &output_file_name) {
   const int num_scene_frames = scene_timestamps.size();
   RET_CHECK_GT(num_scene_frames, 0) << "No scene frames.";
   RET_CHECK_EQ(focus_point_frames.size(), num_scene_frames)
@@ -142,6 +144,7 @@ absl::Status SceneCropper::CropFrames(
 
   // Store the "crop from" location on the input frame for use with an external
   // renderer.
+  // TODO store crop_from_location
   for (int i = 0; i < num_scene_frames; i++) {
     const int left = -(scene_frame_xforms[i].at<float>(0, 2));
     const int top =
@@ -149,22 +152,36 @@ absl::Status SceneCropper::CropFrames(
     crop_from_location->push_back(cv::Rect(left, top, crop_width, crop_height));
   }
 
+  // dump the scene timetstamp and crop locations in a csv file
+  std::ofstream outfile;
+  outfile.open(output_file_name, std::ios_base::app);
+  for (int i = 0; i < num_scene_frames; i++) {
+    outfile << scene_timestamps[i] << "," << crop_from_location->at(i).x << ","
+           << crop_from_location->at(i).y << ","
+           << crop_from_location->at(i).width << ","
+           << crop_from_location->at(i).height << ","
+           << frame_width << ","
+           << frame_height << "\n";
+  }
+
+  outfile.close();
+
   // If no cropped_frames is passed in, return directly.
-  if (!cropped_frames) {
-    return absl::OkStatus();
-  }
-  RET_CHECK(!scene_frames_or_empty.empty())
-      << "If |cropped_frames| != nullptr, scene_frames_or_empty must not be "
-         "empty.";
-  // Prepares cropped frames.
-  cropped_frames->resize(num_scene_frames);
-  for (int i = 0; i < num_scene_frames; ++i) {
-    (*cropped_frames)[i] = cv::Mat::zeros(crop_height, crop_width,
-                                          scene_frames_or_empty[i].type());
-  }
-  return AffineRetarget(cv::Size(crop_width, crop_height),
-                        scene_frames_or_empty, scene_frame_xforms,
-                        cropped_frames);
+  // if (!cropped_frames) {
+  return absl::OkStatus();
+  // }
+  // RET_CHECK(!scene_frames_or_empty.empty())
+  //     << "If |cropped_frames| != nullptr, scene_frames_or_empty must not be "
+  //        "empty.";
+  // // Prepares cropped frames.
+  // cropped_frames->resize(num_scene_frames);
+  // for (int i = 0; i < num_scene_frames; ++i) {
+  //   (*cropped_frames)[i] = cv::Mat::zeros(crop_height, crop_width,
+  //                                         scene_frames_or_empty[i].type());
+  // }
+  // return AffineRetarget(cv::Size(crop_width, crop_height),
+  //                       scene_frames_or_empty, scene_frame_xforms,
+  //                       cropped_frames);
 }
 
 }  // namespace autoflip

@@ -15,7 +15,6 @@
 #ifndef MEDIAPIPE_EXAMPLES_DESKTOP_AUTOFLIP_CALCULATORS_SCENE_CROPPING_CALCULATOR_H_
 #define MEDIAPIPE_EXAMPLES_DESKTOP_AUTOFLIP_CALCULATORS_SCENE_CROPPING_CALCULATOR_H_
 
-#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -98,12 +97,6 @@ namespace autoflip {
 // - optional tag CROPPING_SUMMARY (type VideoCroppingSummary):
 //     Debug summary information for the video. Only generates one packet when
 //     calculator closes.
-// - optional tag EXTERNAL_RENDERING_PER_FRAME (type ExternalRenderFrame)
-//     Provides a per-frame message that can be used to render autoflip using an
-//     external renderer.
-// - optional tag EXTERNAL_RENDERING_FULL_VID (type Vector<ExternalRenderFrame>)
-//     Provides an end-stream message that can be used to render autoflip using
-//     an external renderer.
 //
 // Example config:
 // node {
@@ -167,21 +160,6 @@ class SceneCroppingCalculator : public CalculatorBase {
   // 7. Optionally updates cropping summary.
   absl::Status ProcessScene(const bool is_end_of_scene, CalculatorContext* cc);
 
-  // Formats and outputs the cropped frames passed in through
-  // |cropped_frames_ptr|. Scales them to be at least as big as the target
-  // size. If the aspect ratio is different, applies padding. Uses solid
-  // background from static features if possible, otherwise uses blurred
-  // background. Sets |apply_padding| to true if the scene is padded. Set
-  // |cropped_frames_ptr| to nullptr, to bypass the actual output of the
-  // cropped frames. This is useful when the calculator is only used for
-  // computing the cropping metadata rather than doing the actual cropping
-  // operation.
-  absl::Status FormatAndOutputCroppedFrames(
-      const int crop_width, const int crop_height, const int num_frames,
-      std::vector<cv::Rect>* render_to_locations, bool* apply_padding,
-      std::vector<cv::Scalar>* padding_colors, float* vertical_fill_percent,
-      const std::vector<cv::Mat>* cropped_frames_ptr, CalculatorContext* cc);
-
   // Draws and outputs visualization frames if those streams are present.
   absl::Status OutputVizFrames(
       const std::vector<KeyFrameCropResult>& key_frame_crop_results,
@@ -197,6 +175,9 @@ class SceneCroppingCalculator : public CalculatorBase {
   int target_width_ = -1;
   int target_height_ = -1;
   double target_aspect_ratio_ = -1.0;
+
+  // output file path
+  std::string output_file_path_;
 
   // Input video frame size and format.
   int frame_width_ = -1;
@@ -225,7 +206,7 @@ class SceneCroppingCalculator : public CalculatorBase {
   // size. Add to struct and store together in one vector.
   std::vector<cv::Mat> scene_frames_or_empty_;
   std::vector<cv::Mat> raw_scene_frames_or_empty_;
-  std::vector<int64_t> scene_frame_timestamps_;
+  std::vector<int64> scene_frame_timestamps_;
   std::vector<bool> is_key_frames_;
 
   // Static border information for the scene.
@@ -257,7 +238,7 @@ class SceneCroppingCalculator : public CalculatorBase {
   // Buffered static features and their timestamps used in padding with solid
   // background color (size = number of frames with static features).
   std::vector<StaticFeatures> static_features_;
-  std::vector<int64_t> static_features_timestamps_;
+  std::vector<int64> static_features_timestamps_;
   bool has_solid_background_ = false;
   // CIELAB yields more natural color transitions than RGB and HSV: RGB tends
   // to produce darker in-between colors and HSV can introduce new hues. See
@@ -277,15 +258,6 @@ class SceneCroppingCalculator : public CalculatorBase {
   // Optional diagnostic summary output emitted in Close().
   std::unique_ptr<VideoCroppingSummary> summary_ = nullptr;
 
-  // Optional list of external rendering messages for each processed frame.
-  std::unique_ptr<std::vector<ExternalRenderFrame>> external_render_list_;
-
-  // Determines whether to perform real cropping on input frames. This flag is
-  // useful when the user only needs to compute cropping windows, in which
-  // case setting this flag to false can avoid buffering as well as cropping
-  // frames. This can significantly reduce memory usage and speed up
-  // processing. Some debugging visualization inevitably will be disabled
-  // because of this flag too.
   bool should_perform_frame_cropping_ = false;
 };
 }  // namespace autoflip

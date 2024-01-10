@@ -17,6 +17,8 @@
 
 #include <memory>
 #include <vector>
+#include <iostream>
+#include <fstream>
 
 #include "mediapipe/examples/desktop/autoflip/quality/cropping.pb.h"
 #include "mediapipe/examples/desktop/autoflip/quality/focus_point.pb.h"
@@ -69,7 +71,8 @@ class SceneCropper {
       const std::vector<FocusPointFrame>& prior_focus_point_frames,
       int top_static_border_size, int bottom_static_border_size,
       const bool continue_last_scene, std::vector<cv::Rect>* crop_from_location,
-      std::vector<cv::Mat>* cropped_frames);
+      std::vector<cv::Mat>* cropped_frames,
+      const std::string& output_file_name);
 
   absl::Status ProcessKinematicPathSolver(
       const SceneKeyFrameCropSummary& scene_summary,

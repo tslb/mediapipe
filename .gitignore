@@ -5,3 +5,8 @@ mediapipe/provisioning_profile.mobileprovision
 node_modules/
 .configure.bazelrc
 .user.bazelrc
+mediapipe/models/BUILD
+mediapipe/models/*
+output/*
+third_party/*
+input/*

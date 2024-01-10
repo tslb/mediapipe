@@ -64,9 +64,7 @@ constexpr char kOutputFramingAndDetections[] = "FRAMING_DETECTIONS_VIZ_FRAMES";
 // Final summary of cropping.
 constexpr char kOutputSummary[] = "CROPPING_SUMMARY";
 
-// External rendering outputs
-constexpr char kExternalRenderingPerFrame[] = "EXTERNAL_RENDERING_PER_FRAME";
-constexpr char kExternalRenderingFullVid[] = "EXTERNAL_RENDERING_FULL_VID";
+
 
 absl::Status SceneCroppingCalculator::GetContract(
     mediapipe::CalculatorContract* cc) {
@@ -75,6 +73,9 @@ absl::Status SceneCroppingCalculator::GetContract(
   }
   if (cc->InputSidePackets().HasTag(kAspectRatio)) {
     cc->InputSidePackets().Tag(kAspectRatio).Set<std::string>();
+  }
+  if (cc->InputSidePackets().HasTag("OUTPUT_FILE_PATH")){
+    cc->InputSidePackets().Tag("OUTPUT_FILE_PATH").Set<std::string>();
   }
   if (cc->Inputs().HasTag(kInputVideoFrames)) {
     cc->Inputs().Tag(kInputVideoFrames).Set<ImageFrame>();
@@ -117,14 +118,7 @@ absl::Status SceneCroppingCalculator::GetContract(
   if (cc->Outputs().HasTag(kOutputSummary)) {
     cc->Outputs().Tag(kOutputSummary).Set<VideoCroppingSummary>();
   }
-  if (cc->Outputs().HasTag(kExternalRenderingPerFrame)) {
-    cc->Outputs().Tag(kExternalRenderingPerFrame).Set<ExternalRenderFrame>();
-  }
-  if (cc->Outputs().HasTag(kExternalRenderingFullVid)) {
-    cc->Outputs()
-        .Tag(kExternalRenderingFullVid)
-        .Set<std::vector<ExternalRenderFrame>>();
-  }
+
   RET_CHECK(cc->Inputs().HasTag(kInputVideoFrames) ^
             cc->Inputs().HasTag(kInputVideoSize))
       << "VIDEO_FRAMES or VIDEO_SIZE must be set and not both.";
@@ -132,10 +126,8 @@ absl::Status SceneCroppingCalculator::GetContract(
               cc->Inputs().HasTag(kOutputCroppedFrames)))
       << "CROPPED_FRAMES (internal cropping) has been set as an output without "
          "VIDEO_FRAMES (video data) input.";
-  RET_CHECK(cc->Outputs().HasTag(kExternalRenderingPerFrame) ||
-            cc->Outputs().HasTag(kExternalRenderingFullVid) ||
-            cc->Outputs().HasTag(kOutputCroppedFrames))
-      << "At leaset one output stream must be specified";
+  // RET_CHECK(cc->Outputs().HasTag(kOutputCroppedFrames))
+  //     << "At leaset one output stream must be specified";
   return absl::OkStatus();
 }
 
@@ -168,10 +160,12 @@ absl::Status SceneCroppingCalculator::Open(CalculatorContext* cc) {
   if (cc->Outputs().HasTag(kOutputSummary)) {
     summary_ = absl::make_unique<VideoCroppingSummary>();
   }
-  if (cc->Outputs().HasTag(kExternalRenderingFullVid)) {
-    external_render_list_ =
-        absl::make_unique<std::vector<ExternalRenderFrame>>();
-  }
+  
+  // handles output file details, removing it if it already exists
+  output_file_path_ =
+      cc->InputSidePackets().Tag("OUTPUT_FILE_PATH").Get<std::string>();
+  remove(output_file_path_.c_str());  
+
   should_perform_frame_cropping_ = cc->Outputs().HasTag(kOutputCroppedFrames);
   scene_camera_motion_analyzer_ = absl::make_unique<SceneCameraMotionAnalyzer>(
       options_.scene_camera_motion_analyzer_options());
@@ -197,41 +191,6 @@ absl::Status ParseAspectRatioString(const std::string& aspect_ratio_string,
       << error_msg;
   *aspect_ratio = width_ratio / height_ratio;
   return absl::OkStatus();
-}
-void ConstructExternalRenderMessage(
-    const cv::Rect& crop_from_location, const cv::Rect& render_to_location,
-    const cv::Scalar& padding_color, const uint64_t timestamp_us,
-    ExternalRenderFrame* external_render_message, int frame_width,
-    int frame_height) {
-  auto crop_from_message =
-      external_render_message->mutable_crop_from_location();
-  crop_from_message->set_x(crop_from_location.x);
-  crop_from_message->set_y(crop_from_location.y);
-  crop_from_message->set_width(crop_from_location.width);
-  crop_from_message->set_height(crop_from_location.height);
-
-  auto normalized_crop_from_message =
-      external_render_message->mutable_normalized_crop_from_location();
-  normalized_crop_from_message->set_x(crop_from_location.x /
-                                      static_cast<float>(frame_width));
-  normalized_crop_from_message->set_y(crop_from_location.y /
-                                      static_cast<float>(frame_height));
-  normalized_crop_from_message->set_width(crop_from_location.width /
-                                          static_cast<float>(frame_width));
-  normalized_crop_from_message->set_height(crop_from_location.height /
-                                           static_cast<float>(frame_height));
-
-  auto render_to_message =
-      external_render_message->mutable_render_to_location();
-  render_to_message->set_x(render_to_location.x);
-  render_to_message->set_y(render_to_location.y);
-  render_to_message->set_width(render_to_location.width);
-  render_to_message->set_height(render_to_location.height);
-  auto padding_color_message = external_render_message->mutable_padding_color();
-  padding_color_message->set_r(padding_color[0]);
-  padding_color_message->set_g(padding_color[1]);
-  padding_color_message->set_b(padding_color[2]);
-  external_render_message->set_timestamp_us(timestamp_us);
 }
 
 double GetRatio(int width, int height) {
@@ -387,6 +346,8 @@ absl::Status SceneCroppingCalculator::Process(
     continue_last_scene_ = false;
     MP_RETURN_IF_ERROR(ProcessScene(is_end_of_scene, cc));
   }
+  // save memory
+  should_perform_frame_cropping_ = false;
 
   // Saves frame and timestamp and whether it is a key frame.
   if (HasFrameSignal(cc)) {
@@ -440,11 +401,6 @@ absl::Status SceneCroppingCalculator::Close(mediapipe::CalculatorContext* cc) {
     cc->Outputs()
         .Tag(kOutputSummary)
         .Add(summary_.release(), Timestamp::PostStream());
-  }
-  if (cc->Outputs().HasTag(kExternalRenderingFullVid)) {
-    cc->Outputs()
-        .Tag(kExternalRenderingFullVid)
-        .Add(external_render_list_.release(), Timestamp::PostStream());
   }
   return absl::OkStatus();
 }
@@ -582,7 +538,7 @@ absl::Status SceneCroppingCalculator::ProcessScene(const bool is_end_of_scene,
   // Crops scene frames.
   std::vector<cv::Mat> cropped_frames;
   std::vector<cv::Rect> crop_from_locations;
-
+  
   auto* cropped_frames_ptr =
       should_perform_frame_cropping_ ? &cropped_frames : nullptr;
 
@@ -590,75 +546,12 @@ absl::Status SceneCroppingCalculator::ProcessScene(const bool is_end_of_scene,
       scene_summary, scene_frame_timestamps_, is_key_frames_,
       scene_frames_or_empty_, focus_point_frames, prior_focus_point_frames_,
       top_static_border_size, bottom_static_border_size, continue_last_scene_,
-      &crop_from_locations, cropped_frames_ptr));
-
-  // Formats and outputs cropped frames.
-  bool apply_padding = false;
-  float vertical_fill_percent;
-  std::vector<cv::Rect> render_to_locations;
-  std::vector<cv::Scalar> padding_colors;
-  MP_RETURN_IF_ERROR(FormatAndOutputCroppedFrames(
-      scene_summary.crop_window_width(), scene_summary.crop_window_height(),
-      scene_frame_timestamps_.size(), &render_to_locations, &apply_padding,
-      &padding_colors, &vertical_fill_percent, cropped_frames_ptr, cc));
-  // Caches prior FocusPointFrames if this was not the end of a scene.
-  prior_focus_point_frames_.clear();
-  if (!is_end_of_scene) {
-    const int start =
-        std::max(0, static_cast<int>(scene_frame_timestamps_.size()) -
-                        options_.camera_motion_options()
-                            .polynomial_path_solver()
-                            .prior_frame_buffer_size());
-    for (int i = start; i < num_key_frames; ++i) {
-      prior_focus_point_frames_.push_back(focus_point_frames[i]);
-    }
-  }
-
-  // Optionally outputs visualization frames.
-  MP_RETURN_IF_ERROR(OutputVizFrames(key_frame_crop_results, focus_point_frames,
-                                     crop_from_locations,
-                                     scene_summary.crop_window_width(),
-                                     scene_summary.crop_window_height(), cc));
+      &crop_from_locations, cropped_frames_ptr, output_file_path_));
 
   const double start_sec = Timestamp(scene_frame_timestamps_.front()).Seconds();
   const double end_sec = Timestamp(scene_frame_timestamps_.back()).Seconds();
   VLOG(1) << absl::StrFormat("Processed a scene from %.2f sec to %.2f sec",
                              start_sec, end_sec);
-
-  // Optionally makes summary.
-  if (cc->Outputs().HasTag(kOutputSummary)) {
-    auto* scene_summary = summary_->add_scene_summaries();
-    scene_summary->set_start_sec(start_sec);
-    scene_summary->set_end_sec(end_sec);
-    *(scene_summary->mutable_camera_motion()) = scene_camera_motion;
-    scene_summary->set_is_end_of_scene(is_end_of_scene);
-    scene_summary->set_is_padded(apply_padding);
-  }
-
-  if (cc->Outputs().HasTag(kExternalRenderingPerFrame)) {
-    for (int i = 0; i < scene_frame_timestamps_.size(); i++) {
-      auto external_render_message = absl::make_unique<ExternalRenderFrame>();
-      ConstructExternalRenderMessage(
-          crop_from_locations[i], render_to_locations[i], padding_colors[i],
-          scene_frame_timestamps_[i], external_render_message.get(),
-          frame_width_, frame_height_);
-      cc->Outputs()
-          .Tag(kExternalRenderingPerFrame)
-          .Add(external_render_message.release(),
-               Timestamp(scene_frame_timestamps_[i]));
-    }
-  }
-
-  if (cc->Outputs().HasTag(kExternalRenderingFullVid)) {
-    for (int i = 0; i < scene_frame_timestamps_.size(); i++) {
-      ExternalRenderFrame render_frame;
-      ConstructExternalRenderMessage(crop_from_locations[i],
-                                     render_to_locations[i], padding_colors[i],
-                                     scene_frame_timestamps_[i], &render_frame,
-                                     frame_width_, frame_height_);
-      external_render_list_->push_back(render_frame);
-    }
-  }
 
   key_frame_infos_.clear();
   scene_frames_or_empty_.clear();
@@ -669,167 +562,7 @@ absl::Status SceneCroppingCalculator::ProcessScene(const bool is_end_of_scene,
   return absl::OkStatus();
 }
 
-absl::Status SceneCroppingCalculator::FormatAndOutputCroppedFrames(
-    const int crop_width, const int crop_height, const int num_frames,
-    std::vector<cv::Rect>* render_to_locations, bool* apply_padding,
-    std::vector<cv::Scalar>* padding_colors, float* vertical_fill_percent,
-    const std::vector<cv::Mat>* cropped_frames_ptr, CalculatorContext* cc) {
-  RET_CHECK(apply_padding) << "Has padding boolean is null.";
 
-  // Computes scaling factor and decides if padding is needed.
-  VLOG(1) << "crop_width = " << crop_width << " crop_height = " << crop_height;
-  const double scaling =
-      std::max(static_cast<double>(target_width_) / crop_width,
-               static_cast<double>(target_height_) / crop_height);
-  int scaled_width = std::round(scaling * crop_width);
-  int scaled_height = std::round(scaling * crop_height);
-  RET_CHECK_GE(scaled_width, target_width_)
-      << "Scaled width is less than target width - something is wrong.";
-  RET_CHECK_GE(scaled_height, target_height_)
-      << "Scaled height is less than target height - something is wrong.";
-  if (scaled_width - target_width_ <= 1) scaled_width = target_width_;
-  if (scaled_height - target_height_ <= 1) scaled_height = target_height_;
-  *apply_padding =
-      scaled_width != target_width_ || scaled_height != target_height_;
-  *vertical_fill_percent = scaled_height / static_cast<float>(target_height_);
-  if (*apply_padding) {
-    padder_ = absl::make_unique<PaddingEffectGenerator>(
-        scaled_width, scaled_height, target_aspect_ratio_);
-    VLOG(1) << "Scene is padded: scaled width = " << scaled_width
-            << " target width = " << target_width_
-            << " scaled height = " << scaled_height
-            << " target height = " << target_height_;
-  }
-
-  // Compute the "render to" location.  This is where the rect taken from the
-  // input video gets pasted on the output frame.  For use with external
-  // rendering solutions.
-  for (int i = 0; i < num_frames; i++) {
-    if (*apply_padding) {
-      render_to_locations->push_back(padder_->ComputeOutputLocation());
-    } else {
-      render_to_locations->push_back(
-          cv::Rect(0, 0, target_width_, target_height_));
-    }
-  }
-
-  // Compute padding colors.
-  for (int i = 0; i < num_frames; ++i) {
-    // Set default padding color to white.
-    cv::Scalar padding_color_to_add = cv::Scalar(255, 255, 255);
-    const int64_t time_ms = scene_frame_timestamps_[i];
-    if (*apply_padding) {
-      if (has_solid_background_) {
-        double lab[3];
-        lab[0] = background_color_l_function_.Evaluate(time_ms);
-        lab[1] = background_color_a_function_.Evaluate(time_ms);
-        lab[2] = background_color_b_function_.Evaluate(time_ms);
-        cv::Mat3f lab_mat(1, 1, cv::Vec3f(lab[0], lab[1], lab[2]));
-        cv::Mat3f rgb_mat(1, 1);
-        // Necessary scaling of the RGB values from [0, 1] to [0, 255] based on:
-        // https://docs.opencv.org/2.4/modules/imgproc/doc/miscellaneous_transformations.html#cvtcolor
-        cv::cvtColor(lab_mat, rgb_mat, cv::COLOR_Lab2RGB);
-        rgb_mat *= 255.0;
-        auto k = rgb_mat.at<cv::Vec3f>(0, 0);
-        k[0] = k[0] < 0.0 ? 0.0 : k[0] > 255.0 ? 255.0 : k[0];
-        k[1] = k[1] < 0.0 ? 0.0 : k[1] > 255.0 ? 255.0 : k[1];
-        k[2] = k[2] < 0.0 ? 0.0 : k[2] > 255.0 ? 255.0 : k[2];
-        cv::Scalar interpolated_color =
-            cv::Scalar(std::round(k[0]), std::round(k[1]), std::round(k[2]));
-        padding_color_to_add = interpolated_color;
-      }
-    }
-    padding_colors->push_back(padding_color_to_add);
-  }
-  if (!cropped_frames_ptr) {
-    return absl::OkStatus();
-  }
-
-  // Resizes cropped frames, pads frames, and output frames.
-  for (int i = 0; i < num_frames; ++i) {
-    const int64_t time_ms = scene_frame_timestamps_[i];
-    const Timestamp timestamp(time_ms);
-    auto scaled_frame = absl::make_unique<ImageFrame>(
-        frame_format_, scaled_width, scaled_height);
-    auto destination = formats::MatView(scaled_frame.get());
-    if (scaled_width == crop_width && scaled_height == crop_height) {
-      cropped_frames_ptr->at(i).copyTo(destination);
-    } else {
-      // cubic is better quality for upscaling and area is good for
-      // downscaling
-      const int interpolation_method =
-          scaling > 1 ? cv::INTER_CUBIC : cv::INTER_AREA;
-      cv::resize(cropped_frames_ptr->at(i), destination, destination.size(), 0,
-                 0, interpolation_method);
-    }
-    if (*apply_padding) {
-      cv::Scalar* background_color = nullptr;
-      if (has_solid_background_) {
-        background_color = &padding_colors->at(i);
-      }
-      auto padded_frame = absl::make_unique<ImageFrame>();
-      MP_RETURN_IF_ERROR(padder_->Process(
-          *scaled_frame, background_contrast_,
-          std::min({blur_cv_size_, scaled_width, scaled_height}),
-          overlay_opacity_, padded_frame.get(), background_color));
-      RET_CHECK_EQ(padded_frame->Width(), target_width_)
-          << "Padded frame width is off.";
-      RET_CHECK_EQ(padded_frame->Height(), target_height_)
-          << "Padded frame height is off.";
-      cc->Outputs()
-          .Tag(kOutputCroppedFrames)
-          .Add(padded_frame.release(), timestamp);
-    } else {
-      cc->Outputs()
-          .Tag(kOutputCroppedFrames)
-          .Add(scaled_frame.release(), timestamp);
-    }
-  }
-  return absl::OkStatus();
-}
-
-absl::Status SceneCroppingCalculator::OutputVizFrames(
-    const std::vector<KeyFrameCropResult>& key_frame_crop_results,
-    const std::vector<FocusPointFrame>& focus_point_frames,
-    const std::vector<cv::Rect>& crop_from_locations,
-    const int crop_window_width, const int crop_window_height,
-    CalculatorContext* cc) const {
-  if (cc->Outputs().HasTag(kOutputKeyFrameCropViz)) {
-    std::vector<std::unique_ptr<ImageFrame>> viz_frames;
-    MP_RETURN_IF_ERROR(DrawDetectionsAndCropRegions(
-        scene_frames_or_empty_, is_key_frames_, key_frame_infos_,
-        key_frame_crop_results, frame_format_, &viz_frames));
-    for (int i = 0; i < scene_frames_or_empty_.size(); ++i) {
-      cc->Outputs()
-          .Tag(kOutputKeyFrameCropViz)
-          .Add(viz_frames[i].release(), Timestamp(scene_frame_timestamps_[i]));
-    }
-  }
-  if (cc->Outputs().HasTag(kOutputFocusPointFrameViz)) {
-    std::vector<std::unique_ptr<ImageFrame>> viz_frames;
-    MP_RETURN_IF_ERROR(DrawFocusPointAndCropWindow(
-        scene_frames_or_empty_, focus_point_frames,
-        options_.viz_overlay_opacity(), crop_window_width, crop_window_height,
-        frame_format_, &viz_frames));
-    for (int i = 0; i < scene_frames_or_empty_.size(); ++i) {
-      cc->Outputs()
-          .Tag(kOutputFocusPointFrameViz)
-          .Add(viz_frames[i].release(), Timestamp(scene_frame_timestamps_[i]));
-    }
-  }
-  if (cc->Outputs().HasTag(kOutputFramingAndDetections)) {
-    std::vector<std::unique_ptr<ImageFrame>> viz_frames;
-    MP_RETURN_IF_ERROR(DrawDetectionAndFramingWindow(
-        raw_scene_frames_or_empty_, crop_from_locations, frame_format_,
-        options_.viz_overlay_opacity(), &viz_frames));
-    for (int i = 0; i < raw_scene_frames_or_empty_.size(); ++i) {
-      cc->Outputs()
-          .Tag(kOutputFramingAndDetections)
-          .Add(viz_frames[i].release(), Timestamp(scene_frame_timestamps_[i]));
-    }
-  }
-  return absl::OkStatus();
-}
 
 REGISTER_CALCULATOR(SceneCroppingCalculator);
 
