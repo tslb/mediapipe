@@ -161,7 +161,9 @@ absl::Status SceneCropper::CropFrames(
            << crop_from_location->at(i).width << ","
            << crop_from_location->at(i).height << ","
            << frame_width << ","
-           << frame_height << "\n";
+           << frame_height << ","
+           << top_static_border_size << ","
+            << bottom_static_border_size << std::endl;
   }
 
   outfile.close();
