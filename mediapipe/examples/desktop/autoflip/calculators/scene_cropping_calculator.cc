@@ -416,8 +416,7 @@ absl::Status SceneCroppingCalculator::RemoveStaticBorders(
   const double scale = static_cast<double>(frame_height_) / key_frame_height_;
   top_border_distance_ = std::round(scale * *top_border_size);
   const int bottom_border_distance = std::round(scale * *bottom_border_size);
-  effective_frame_height_ =
-      frame_height_ - top_border_distance_ - bottom_border_distance;
+  effective_frame_height_ = frame_height_;
 
   // Store shallow copy of the original frames for debug display if required
   // before static areas are removed.
